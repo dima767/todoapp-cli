@@ -51,6 +51,7 @@ COMMAND commands[] = {
 
 static struct todo_item {
     char *what;
+    struct todo_item *head;
     struct todo_item *next;
 } *todo_item_list;
 
@@ -282,6 +283,12 @@ command_generator (text, state)
 /*                                                                  */
 /* **************************************************************** */
 
+static void init_todo(struct todo_item **todo, char *what) {
+   *todo = xmalloc(sizeof(**todo));
+	memset(*todo, 0, sizeof(**todo));
+   (*todo)->what = strdup(what);
+}
+
 /* List the file(s) named in arg. */
 int
 com_add_todo (char *arg)
@@ -290,19 +297,20 @@ com_add_todo (char *arg)
         return 1;
     }
 	
-	struct todo_item *todo = todo_item_list;
-	
+	struct todo_item *todo = todo_item_list;	
 	if(!todo) {
-		todo = xmalloc(sizeof(*todo));
-		memset(todo, 0, sizeof(*todo));
-	}
-	todo->what = strdup(arg);
-	
-	todo->next = todo_item_list;
-	todo_item_list = todo;
-	
-    printf ("Added a new TODO item [ %s ]\n\n", arg);
-    return 0;
+      init_todo(&todo, arg);
+      todo->head = todo;
+	   todo->next = todo_item_list;
+      todo_item_list = todo;
+   }
+   else {
+      init_todo(&todo->next, arg);
+      todo->next->head = todo_item_list->head;
+      todo_item_list = todo->next;
+   }
+   printf ("Added a new TODO item [ %s ]\n\n", arg);
+   return 0;
 }
 
 int
@@ -310,10 +318,14 @@ com_show_todos (char *arg)
 {
    if(!todo_item_list) {
        printf("You've got nothing TODO!\n");
+       return 0;
    }
-   else {
-       printf("* TODO: %s\n", todo_item_list->what);
+   struct todo_item *item, **pp = &todo_item_list->head;
+   while((item = *pp) != NULL) {
+       printf("* TODO: %s\n", item->what);
+       pp = &item->next;
    }
+   
    return 0;
 }
 
