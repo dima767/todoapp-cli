@@ -49,11 +49,16 @@ COMMAND commands[] = {
    { (char *)NULL, (rl_icpfunc_t *)NULL, (char *)NULL }
 };
 
+/* Items are store in memory in the global structure (allocated on the heap)
+*  for the time being. Later will replace it with Redis storage */
 static struct todo_item {
+   unsigned id;
     char *what;
     struct todo_item *head;
     struct todo_item *next;
 } *todo_item_list;
+
+static unsigned id_gen = 0;
 
 
 /* Forward declarations. */
@@ -287,6 +292,7 @@ static void init_todo(struct todo_item **todo, char *what) {
    *todo = xmalloc(sizeof(**todo));
 	memset(*todo, 0, sizeof(**todo));
    (*todo)->what = strdup(what);
+   (*todo)->id = ++id_gen;
 }
 
 /* List the file(s) named in arg. */
@@ -322,7 +328,7 @@ com_show_todos (char *arg)
    }
    struct todo_item *item, **pp = &todo_item_list->head;
    while((item = *pp) != NULL) {
-       printf("* TODO: %s\n", item->what);
+       printf("%d: %s\n", item->id, item->what);
        pp = &item->next;
    }
    
