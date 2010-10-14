@@ -28,6 +28,7 @@ typedef int rl_icpfunc_t (char *);
 
 /* The names of functions that actually do the work. */
 int com_add_todo (char *);
+int com_remove_todo(char *);
 int com_show_todos (char *);
 int com_help(char *);
 int com_quit(char *);
@@ -43,6 +44,7 @@ typedef struct {
 
 COMMAND commands[] = {
    { "t", com_add_todo, "Add new TODO item" },
+   { "d", com_remove_todo, "Check off completed TODO item" },
    { "s", com_show_todos, "Show the TODO list" },
    { "?", com_help, "Show list of available commands" },
    { "q", com_quit, "Quit" }, 
@@ -203,6 +205,22 @@ stripwhite (char *string)
    return s;
 }
 
+static unsigned is_numeric(const char *s) {
+   char ch;
+   if((ch = *s++) == '\0') {
+      return 0;
+   }
+   if(!isdigit(ch)) {
+      return 0;
+   }
+   while((ch = *s++) != '\0') {
+      if(!isdigit(ch)) {
+         return 0;
+      }
+   }
+   return 1;
+}
+
 /* **************************************************************** */
 /*                                                                  */
 /*                  Interface to Readline Completion                */
@@ -295,7 +313,6 @@ static void init_todo(struct todo_item **todo, char *what) {
    (*todo)->id = ++id_gen;
 }
 
-/* List the file(s) named in arg. */
 int
 com_add_todo (char *arg)
 {
@@ -304,20 +321,52 @@ com_add_todo (char *arg)
     }
 	
 	struct todo_item *todo = todo_item_list;	
-	if(!todo) {
-      init_todo(&todo, arg);
-      todo->head = todo;
-	   todo->next = todo_item_list;
-      todo_item_list = todo;
-   }
-   else {
-      init_todo(&todo->next, arg);
-      todo->next->head = todo_item_list->head;
-      todo_item_list = todo->next;
-   }
+	while(todo) {
+      todo = todo->next;
+	}
+	init_todo(&todo, arg);
+   todo->next = todo_item_list;
+   todo_item_list = todo;
+   
    printf ("Added a new TODO item [ %s ]\n\n", arg);
    return 0;
 }
+
+int
+com_remove_todo (char *arg)
+{
+    if(!todo_item_list) {
+        printf("You've got no TODO items to check off\n");
+        return 0;
+    }    
+    if (!assert_has_value ("d", arg, "Please indicate which item to check off")) {
+        return 1;
+    }
+    if(!is_numeric(stripwhite(arg))) {
+       printf("Item ID must be numeric\n");
+       return 1;
+    }
+    unsigned item_id = (unsigned)atoi(arg);    
+    struct todo_item *curr, **pp = &todo_item_list;
+    struct todo_item *prev = NULL;
+    
+    while((curr = *pp) != NULL) {
+       if(curr->id == item_id) {
+          *pp = curr->next;
+          if(prev) {
+             prev->next = *pp;
+          }
+          free(curr->what);
+          free(curr);
+          return 0;
+       }
+       prev = curr;
+       pp = &curr->next;
+    }
+    
+    return 0;
+}    
+
 
 int
 com_show_todos (char *arg)
@@ -326,7 +375,7 @@ com_show_todos (char *arg)
        printf("You've got nothing TODO!\n");
        return 0;
    }
-   struct todo_item *item, **pp = &todo_item_list->head;
+   struct todo_item *item, **pp = &todo_item_list;
    while((item = *pp) != NULL) {
        printf("%d: %s\n", item->id, item->what);
        pp = &item->next;
