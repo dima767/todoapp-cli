@@ -13,6 +13,8 @@
 #include <locale.h>
 #include <time.h>
 
+#include <hiredis.h>
+
 /* GNU readline
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -24,6 +26,8 @@ void initialize_readline ();
 int execute_line (char *line);
 int assert_has_value (char *caller, char *arg, char *msg);
 
+void init_redis_connection();
+
 typedef int rl_icpfunc_t (char *);
 
 /* The names of functions that actually do the work. */
@@ -32,6 +36,7 @@ int com_remove_todo(char *);
 int com_show_todos (char *);
 int com_help(char *);
 int com_quit(char *);
+int com_redis_ping(char *);
 
 /* A structure which contains information on the commands this program
    can understand. */
@@ -47,21 +52,14 @@ COMMAND commands[] = {
    { "d", com_remove_todo, "Check off completed TODO item" },
    { "s", com_show_todos, "Show the TODO list" },
    { "?", com_help, "Show list of available commands" },
-   { "q", com_quit, "Quit" }, 
+   { "q", com_quit, "Quit" },
+   { "rp", com_redis_ping, "Ping Redis server" }, 
    { (char *)NULL, (rl_icpfunc_t *)NULL, (char *)NULL }
 };
 
-/* Items are store in memory in the global structure (allocated on the heap)
-*  for the time being. Later will replace it with Redis storage */
-static struct todo_item {
-   unsigned id;
-    char *what;
-    struct todo_item *head;
-    struct todo_item *next;
-} *todo_item_list;
-
-static unsigned id_gen = 0;
-
+/* Redis socket fd and client struct */
+int fd;
+redisReply *reply;
 
 /* Forward declarations. */
 char *stripwhite ();
@@ -95,6 +93,8 @@ main (int argc, char **argv)
    initialize_readline();       /* Bind our completer. */
 
    stifle_history(7);
+   
+   init_redis_connection();
 
    /* Loop reading and executing lines until the user quits. */
    for ( ; done == 0; )
@@ -302,15 +302,57 @@ command_generator (text, state)
 
 /* **************************************************************** */
 /*                                                                  */
+/*                       Redis session connection init              */
+/*                                                                  */
+/* **************************************************************** */
+
+void init_redis_connection() {
+    reply = redisConnect(&fd, "127.0.0.1", 6379);
+    if (reply != NULL) {
+        printf("Connection error: %s", reply->reply);
+        exit(1);
+    }
+}
+
+
+/* **************************************************************** */
+/*                                                                  */
 /*                       TODOMan Commands                           */
 /*                                                                  */
 /* **************************************************************** */
 
-static void init_todo(struct todo_item **todo, char *what) {
-   *todo = xmalloc(sizeof(**todo));
-	memset(*todo, 0, sizeof(**todo));
-   (*todo)->what = strdup(what);
-   (*todo)->id = ++id_gen;
+int com_redis_ping(char *arg) {    
+    unsigned j;
+    
+    /* Trying out Hash commands */
+    reply = redisCommand(fd, "HSET %s %s %s", "todos", "1", "New todo");    
+    freeReplyObject(reply);
+    
+    reply = redisCommand(fd, "HGETALL %s", "todos");
+    if (reply->type == REDIS_REPLY_ARRAY) {
+        for (j = 0; j < reply->elements; j++) {
+            if((j % 2) == 0) {
+                printf("%s: ", reply->element[j]->reply);
+            }
+            else {
+                printf("%s\n", reply->element[j]->reply);
+            }
+        }
+    }
+    
+    if(arg) {
+        reply = redisCommand(fd, "HDEL %s %s", "todos", "2");    
+        freeReplyObject(reply);
+    }
+    
+    
+    return 0;
+}
+
+static void next_todo_id(char buf[]) {
+    reply = redisCommand(fd, "INCR %s", "todo_id");
+    sprintf(buf, "%lli", reply->integer);
+    freeReplyObject(reply);
 }
 
 int
@@ -319,69 +361,69 @@ com_add_todo (char *arg)
     if (!assert_has_value ("t", arg, "Please describe your todo item")) {
         return 1;
     }
-	
-	struct todo_item *todo = todo_item_list;	
-	while(todo) {
-      todo = todo->next;
-	}
-	init_todo(&todo, arg);
-   todo->next = todo_item_list;
-   todo_item_list = todo;
-   
-   printf ("Added a new TODO item [ %s ]\n\n", arg);
-   return 0;
+
+    char todo_id[7];    
+    next_todo_id(todo_id);
+    
+    reply = redisCommand(fd, "HSET %s %s %s", "todos", todo_id, arg);    
+    freeReplyObject(reply);
+        
+    printf ("Added new TODO item [ %s: %s ]\n\n", todo_id, arg);
+    return com_show_todos(NULL);
 }
 
 int
 com_remove_todo (char *arg)
 {
-    if(!todo_item_list) {
-        printf("You've got no TODO items to check off\n");
-        return 0;
-    }    
-    if (!assert_has_value ("d", arg, "Please indicate which item to check off")) {
+        
+    if (!assert_has_value ("d", arg, "Please indicate which item to check off.")) {
         return 1;
     }
     if(!is_numeric(stripwhite(arg))) {
        printf("Item ID must be numeric\n");
        return 1;
     }
-    unsigned item_id = (unsigned)atoi(arg);    
-    struct todo_item *curr, **pp = &todo_item_list;
-    struct todo_item *prev = NULL;
     
-    while((curr = *pp) != NULL) {
-       if(curr->id == item_id) {
-          *pp = curr->next;
-          if(prev) {
-             prev->next = *pp;
-          }
-          free(curr->what);
-          free(curr);
-          return 0;
-       }
-       prev = curr;
-       pp = &curr->next;
+    reply = redisCommand(fd, "HEXISTS %s %s", "todos", arg);
+    if(reply->integer == 0) {
+        printf("You are trying to check off a wrong TODO item. Try again.\n");
+        freeReplyObject(reply);
+        return 0;
     }
     
-    return 0;
+    reply = redisCommand(fd, "HDEL %s %s", "todos", arg);
+    freeReplyObject(reply);
+    
+    return com_show_todos(NULL);
 }    
 
 
 int
 com_show_todos (char *arg)
 {
-   if(!todo_item_list) {
-       printf("You've got nothing TODO!\n");
-       return 0;
-   }
-   struct todo_item *item, **pp = &todo_item_list;
-   while((item = *pp) != NULL) {
-       printf("%d: %s\n", item->id, item->what);
-       pp = &item->next;
-   }
+    
+    reply = redisCommand(fd, "HLEN %s", "todos");
+    if(reply->integer == 0) {
+        printf("You've got nothing TODO!\n");
+        freeReplyObject(reply);
+        return 0;
+    }
+    
+    reply = redisCommand(fd, "HGETALL %s", "todos");
+    if (reply->type == REDIS_REPLY_ARRAY) {
+        unsigned j;
+        for (j = 0; j < reply->elements; j++) {
+            if((j % 2) == 0) {
+                printf("%s: ", reply->element[j]->reply);
+            }
+            else {
+                printf("%s\n", reply->element[j]->reply);
+            }
+        }
+    }
+    freeReplyObject(reply);
    
-   return 0;
+    return 0;
 }
 
 /* Print out help for ARG, or for all of the commands if ARG is
