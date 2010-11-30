@@ -306,14 +306,13 @@ command_generator (text, state)
 /*                                                                  */
 /* **************************************************************** */
 
-void init_redis_connection() {
+static void init_redis_connection() {
     reply = redisConnect(&fd, "127.0.0.1", 6379);
     if (reply != NULL) {
         printf("Connection error: %s", reply->reply);
         exit(1);
     }
 }
-
 
 /* **************************************************************** */
 /*                                                                  */
